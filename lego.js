@@ -1,27 +1,255 @@
 'use strict';
 
-// Метод, который будет выполнять операции над коллекцией один за другим
-module.exports.query = function (collection /* операторы через запятую */) {
-
+// Список названий полей телефонной книги
+var phoneBookFields = ['age', 'gender', 'name', 'email', 'phone', 'favoriteFruit'];
+var sortTypes = {asc: 'asc', desc: 'desc'};
+var allFields = '*';
+// Если поле не присутствует в записной книжке выбрасывает исключение
+function isPhoneBookField(field) {
+    if (phoneBookFields.indexOf(field) === -1) {//includes не сработало
+        throw new Error('Invalid field: ' + field);
+    }
 };
 
-// Оператор reverse, который переворачивает коллекцию
-module.exports.reverse = function () {
-    return function (collection) {
-        var changedCollection = collection.reverse();
+function isFunction(func) {
+    if (typeof func === 'function') {
+        return true;
+    } else {
+        return false;
+    }
+};
 
-        // Возращаем изменённую коллекцию
-        return changedCollection;
+// Метод, который будет выполнять операции над коллекцией один за другим
+module.exports.query = function (collection,
+                                selectFields,
+                                filterCollection,
+                                sortCollection,
+                                formatCollection,
+                                limitCollection) {
+    var qyeryRes = [];
+
+    if (isFunction(selectFields)) {
+        qyeryRes = selectFields(collection);
+    }
+
+    if (isFunction(filterCollection)) {
+        qyeryRes = Array.from(filterCollection(qyeryRes));
+        var i = 0;
+        var l = qyeryRes.length;
+        while (i < l) {
+            if (qyeryRes[i] === null) {
+                qyeryRes.splice(i, 1);
+            } else {
+                i++;
+            }
+        }
+    }
+
+    if (isFunction(sortCollection)) {
+        qyeryRes = Array.from(sortCollection(qyeryRes));
+    }
+
+    if (isFunction(formatCollection)) {
+        qyeryRes = Array.from(formatCollection(qyeryRes));
+    }
+
+    if (isFunction(limitCollection)) {
+        qyeryRes = Array.from(limitCollection(qyeryRes));
+    }
+
+    return qyeryRes;
+};
+
+module.exports.select = function () {
+    var fields = [];
+    if (!arguments.length) {
+        throw new Error('no selected fields');
+    }
+    if (arguments.length === 1 && arguments[0] === allFields) {
+        fields = Array.from(phoneBookFields);
+    } else {
+        for (var i = 0, l = arguments.length; i < l; i++) {
+            isPhoneBookField(arguments[i]);
+            fields.push(arguments[i]);
+        }
+    }
+
+    var selectFields = function (collection) {
+        var newCollection = [];
+        var record = {};
+        for (var i = 0, l = collection.length; i < l; i++) {
+            for (var j = 0, fl = fields.length; j < fl; j++) {
+                record[fields[j]] = collection[i][fields[j]];
+            }
+            newCollection.push(record);
+            record = {};
+        }
+        return newCollection;
     };
+    return selectFields;
+};
+
+module.exports.filterIn = function (field, values) {
+    isPhoneBookField(field);
+    var filter = {
+        field: field,
+        values: values
+    };
+
+    var filterCollection = function (collection) {
+        for (var i = 0, l = collection.length; i < l; i++) {
+            if (filter && filter.values.indexOf(collection[i][filter.field]) === -1) {
+                collection[i] = null;
+            }
+        }
+        return collection;
+    };
+    return filterCollection;
+};
+
+module.exports.sortBy = function (field, type) {
+    isPhoneBookField(field);
+    if (type === undefined) {
+        type = sortTypes.asc;
+    }
+    if (type !== sortTypes.desc && type !== sortTypes.asc) {
+        throw new Error('Invalid sort type: ' + type);
+    }
+    var sorter = {
+        field: field,
+        type: type
+    };
+
+    var sortCollection = function (collection) {
+        var buferRecord;
+        for (var i = 0, l = collection.length; i < l; i++) {
+            for (var j = i + 1, l = collection.length; j < l; j++) {
+                if (collection[i][sorter.field] > collection[j][sorter.field] &&
+                    sorter.type === sortTypes.asc) {
+                    buferRecord = Object.assign({}, collection[i]);
+                    collection[i] = Object.assign({}, collection[j]);
+                    collection[j] = Object.assign({}, buferRecord);
+                    buferRecord = {};
+                } else if (collection[i][sorter.field] < collection[j][sorter.field] &&
+                        sorter.type === sortTypes.desc) {
+                    buferRecord = Object.assign({}, collection[i]);
+                    collection[i] = Object.assign({}, collection[j]);
+                    collection[j] = Object.assign({}, buferRecord);
+                    buferRecord = {};
+                }
+            }
+        }
+        return collection;
+    };
+    return sortCollection;
+};
+
+module.exports.format = function (field, func) {
+    isPhoneBookField(field);
+    if (!isFunction(func)) {
+        throw new Error('Invalid type: ' + typeof func + '. Function expected');
+    }
+    var formater = {
+        field: field,
+        func: func
+    };
+
+    var formatCollection = function (collection) {
+        if (formater) {
+            for (var i = 0, l = collection.length; i < l; i++) {
+                collection[i][formater.field] = formater.func(collection[i][formater.field]);
+            }
+        }
+        return collection;
+    };
+    return formatCollection;
+};
+
+module.exports.filterEqual = function (field, value) {
+    // без module.exports ошибка 'filterIn is not defined'
+    return module.exports.filterIn(field, [value]);
+};
+
+module.exports.or = function () {
+    if (!arguments.length) {
+        return function () {
+            return [];
+        };
+    }
+    var someFunctions = Array.from(arguments);
+
+    var justOr = function (collection) {
+        var collections = [];
+        var newCollection = [];
+        for (var i = 0, l = someFunctions.length; i < l; i++) {
+            newCollection = Array.from(collection);
+            collections.push(someFunctions[i](newCollection));
+            newCollection = [];
+        }
+        var defaultValue;
+        for (var j = 0, cl = collection.length; j < cl; j++) {
+            defaultValue = false;
+            for (var i = 0, l = collections.length; i < l; i++) {
+                defaultValue = defaultValue || collections[i][j];
+            }
+            if (defaultValue) {
+                newCollection.push(defaultValue);
+            }
+        }
+        return newCollection;
+    };
+    return justOr;
+};
+
+module.exports.and = function () {
+    if (!arguments.length) {
+        return function () {
+            return [];
+        };
+    }
+    var someFunctions = Array.from(arguments);
+
+    var justAnd = function (collection) {
+        var collections = [];
+        var newCollection = [];
+        for (var i = 0, l = someFunctions.length; i < l; i++) {
+            newCollection = Array.from(collection);
+            collections.push(someFunctions[i](newCollection));
+            newCollection = [];
+        }
+        var defaultValue;
+        for (var j = 0, cl = collection.length; j < cl; j++) {
+            defaultValue = true;
+            for (var i = 0, l = collections.length; i < l; i++) {
+                defaultValue = defaultValue && collections[i][j];
+            }
+            if (defaultValue) {
+                newCollection.push(defaultValue);
+            }
+        }
+        return newCollection;
+    };
+    return justAnd;
 };
 
 // Оператор limit, который выбирает первые N записей
 module.exports.limit = function (n) {
-    // Магия
+    var lim;
+
+    if (n === undefined) {
+        lim = 0;
+    }
+    lim = Number(n);
+    if (isNaN(lim) || lim < 1) {
+        throw new Error('Invalid limit: ' + n);
+    }
+
+    var limitCollection = function (collection) {
+        if (lim) {
+            collection.splice(lim, Number.MAX_VALUE);
+        }
+        return collection;
+    };
+
+    return limitCollection;
 };
-
-// Вам необходимо реализовать остальные операторы:
-// select, filterIn, filterEqual, sortBy, format, limit
-
-// Будет круто, если реализуете операторы:
-// or и and
